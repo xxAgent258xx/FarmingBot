@@ -40,7 +40,7 @@ def check_min_datetime(date1: str, date2: str):
                 elif int(date1[11:13]) < int(date2[11:13]):
                     return date1
                 else:
-                    """Сравнение по часам"""
+                    """Сравнение по минутам"""
                     if int(date1[14:16]) > int(date2[14:16]):
                         return date2
                     elif int(date1[14:16]) < int(date2[14:16]):
