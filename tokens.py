@@ -1,0 +1,1 @@
+FARMING_BOT_TOKEN = ""
