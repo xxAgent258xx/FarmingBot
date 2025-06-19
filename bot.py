@@ -1,3 +1,4 @@
+import logging
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -58,6 +59,7 @@ def check_min_datetime(date1: str, date2: str):
 """Создание экземпляра бота"""
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+logging.basicConfig(level=logging.INFO)
 
 # 01.01.2025 00:00:00
 
@@ -65,56 +67,59 @@ dp = Dispatcher()
 @dp.message(Command(commands=['get']))
 async def get_m(message: Message):
     lvl_up = False
+    maybe = False
+    new = True
     """Подключение БД"""
-    connector = await aiosqlite.connect(DB_NAME)
-    cursor = await connector.cursor()
+    async with aiosqlite.connect(DB_NAME) as db:
+        """Проверка на запись в БД"""
+        async with db.execute(f'SELECT kol FROM stat WHERE user_id={message.from_user.id}') as cursor:
+            async for row in cursor:
+                new = False
+        if new:
+            await db.execute(f'INSERT INTO stat(user_id, kol, koff, gets_kol) VALUES ({message.from_user.id}, 0, 0, 1)')
+            await db.commit()
+            kol, last, koff_index, gets_kol = 0, None, 0, 1
+        else:
+            """Получение значений из БД"""
+            async with db.execute(
+                    f'SELECT kol, last, gets_kol, koff FROM stat WHERE user_id={message.from_user.id}') as cursor:
+                async for row in cursor:
+                    kol = row[0]
+                    last = row[1]
+                    gets_kol = row[2] + 1
+                    koff_index = row[3]
 
-    """Проверка на запись в БД"""
-    if await cursor.execute(f'SELECT kol FROM stat WHERE user_id={message.from_user.id}').fetchone() is None:
-        await cursor.execute(f'INSERT INTO stat(user_id, kol, koff, gets_kol) VALUES ({message.from_user.id}, 0, 0, 0)')
+        dtime = datetime.datetime.now().strftime("%d.%m.%Y %X")
+        h2 = (datetime.datetime(day=int(last[2][0:2]), month=int(last[2][3:5]), year=int(last[2][6:10]),
+                                hour=int(last[2][11:13]), minute=int(last[2][14:16]),
+                                second=int(last[2][17:19])) + datetime.timedelta(hours=2)).strftime("%d.%m.%Y %X")
+        get_kol = koffs[koff_index]
 
-    """Получение значений из БД"""
-    m_kol = await cursor.execute(f'SELECT kol FROM stat WHERE user_id={message.from_user.id}').fetchone()[0]
-    last = await cursor.execute(f'SELECT last FROM stat WHERE user_id={message.from_user.id}').fetchone()[0]
-    dtime = datetime.datetime.now().strftime("%d.%m.%Y %X")
-    gets_kol = await cursor.execute(f'SELECT gets_kol FROM stat WHERE user_id={message.from_user.id}').fetchone()[0] + 1
-    koff_index = await cursor.execute(f'SELECT koff FROM stat WHERE user_id={message.from_user.id}').fetchone()[0]
-    get_kol = koffs[koff_index]
+        """Проверка на интервал времени"""
+        if last is None:
+            maybe = True
+        elif check_min_datetime(dtime, h2) != dtime:
+            maybe = True
 
-    """Проверка на переход на новый уровень"""
-    if gets_kol == koffs_kol[koff_index + 1]:
-        koff_index += 1
-        lvl_up = True
+        if maybe:
+            """Проверка на переход на новый уровень"""
+            if koff_index + 1 < len(koffs_kol):
+                if gets_kol == koffs_kol[koff_index + 1]:
+                    koff_index += 1
+                    lvl_up = True
 
-    """Проверка на интервал времени"""
-    if (
-            last is None
-            or
-            check_min_datetime(dtime, (
-                    datetime.datetime(day=int(last[0:2]), month=int(last[3:5]), year=int(last[6:10]),
-                                      hour=int(last[11:13]), minute=int(last[14:16]),
-                                      second=int(last[17:19])) + datetime.timedelta(hours=2)
-            ).strftime("%d.%m.%Y %X")) != dtime
-       ):
-        maybe = True
-    else:
-        maybe = False
+            """Обновление БД"""
+            await db.execute(
+                f'UPDATE stat SET kol={kol + get_kol}, last="{dtime}", koff={koff_index}, gets_kol={gets_kol} WHERE user_id={message.from_user.id}')
+            await db.commit()
 
-    if maybe:
-        """Обновление БД"""
-        await cursor.execute(
-            f'UPDATE stat SET kol={m_kol + get_kol}, last="{dtime}", koff={koff_index}, gets_kol={gets_kol} WHERE user_id={message.from_user.id}')
-
-        """Отправка ответа"""
-        await message.reply(
-            f'{message.from_user.full_name}, вы получили {get_kol}🍊\n'
-            f'Возвращайтесь через 2 часа. Всего: {m_kol + get_kol}🍊\n'
-            f'{"Новый уровень! " if lvl_up else ""}Ваш уровень: {koff_index + 1} (x{get_kol}). До следующего уровня:{koffs_kol[koff_index + 1] - gets_kol}')
-    else:
-        await message.reply('Рано получать мандарины❌')
-    await connector.commit()
-    await cursor.close()
-    await connector.close()
+            """Отправка ответа"""
+            await message.reply(
+                f'{message.from_user.full_name}, вы получили {get_kol}🍊\n'
+                f'Возвращайтесь через 2 часа. Всего: {kol + get_kol}🍊\n'
+                f'{"Новый уровень! " if lvl_up else ""}Ваш уровень: {koff_index + 1} (x{get_kol}). До следующего уровня:{koffs_kol[koff_index + 1] - gets_kol}')
+        else:
+            await message.reply('Рано получать мандарины❌')
 
 
 @dp.message()
